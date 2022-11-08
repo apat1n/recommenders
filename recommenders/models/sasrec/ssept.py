@@ -180,9 +180,8 @@ class SSEPT(SASREC):
         seq_embeddings, positional_embeddings = self.embedding(input_seq)  # (1, s, h)
 
         u0_latent = self.user_embedding_layer(user)
-        u0_latent = u0_latent * (self.user_embedding_dim ** 0.5)  # (1, 1, h)
-        u0_latent = tf.squeeze(u0_latent, axis=0)  # (1, h)
-        test_user_emb = tf.tile(u0_latent, [1 + self.num_neg_test, 1])  # (101, h)
+        u0_latent = u0_latent * (self.user_embedding_dim ** 0.5)  # (b, 1, h)
+        test_user_emb = tf.tile(u0_latent, [1, 1 + self.num_neg_test, 1])  # (b, 101, h)
 
         u_latent = self.user_embedding_layer(user)
         u_latent = u_latent * (self.user_embedding_dim ** 0.5)  # (b, 1, h)
@@ -204,9 +203,8 @@ class SSEPT(SASREC):
         )  # (b*s1, h1+h2)
 
         candidate_emb = self.item_embedding_layer(candidate)  # (b, s2, h2)
-        candidate_emb = tf.squeeze(candidate_emb, axis=0)  # (s2, h2)
         candidate_emb = tf.reshape(
-            tf.concat([candidate_emb, test_user_emb], 1), [-1, self.hidden_units]
+            tf.concat([candidate_emb, test_user_emb], -1), [-1, self.hidden_units]
         )  # (b*s2, h1+h2)
 
         candidate_emb = tf.transpose(candidate_emb, perm=[1, 0])  # (h1+h2, b*s2)
@@ -214,10 +212,10 @@ class SSEPT(SASREC):
 
         test_logits = tf.reshape(
             test_logits,
-            [tf.shape(input_seq)[0], self.seq_max_len, 1 + self.num_neg_test],
-        )  # (1, s, 101)
-        test_logits = test_logits[:, -1, :]  # (1, 101)
-        return test_logits
+            [tf.shape(input_seq)[0], self.seq_max_len, tf.shape(input_seq)[0], 1 + self.num_neg_test],
+        )  # (b, s, b, num_neg_test)
+        test_logits = test_logits[:, -1, :, :]  # (b, b, num_neg_test)
+        return tf.concat([test_logits[i, i, :] for i in range(len(test_logits))])  # (b, num_neg_test)
 
     def loss_function(self, pos_logits, neg_logits, istarget):
         """Losses are calculated separately for the positive and negative

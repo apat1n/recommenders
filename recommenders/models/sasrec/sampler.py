@@ -30,7 +30,6 @@ def sample_function(
     """
 
     def sample():
-
         user = np.random.randint(1, usernum + 1)
         while len(user_train[user]) <= 1:
             user = np.random.randint(1, usernum + 1)
@@ -52,14 +51,11 @@ def sample_function(
             if idx == -1:
                 break
 
-        return (user, seq, pos, neg)
+        return user, seq, pos, neg
 
     np.random.seed(seed)
     while True:
-        one_batch = []
-        for i in range(batch_size):
-            one_batch.append(sample())
-
+        one_batch = [sample() for _ in range(batch_size)]
         result_queue.put(zip(*one_batch))
 
 

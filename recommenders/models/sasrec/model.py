@@ -26,7 +26,7 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         super(MultiHeadAttention, self).__init__()
         self.num_heads = num_heads
         self.attention_dim = attention_dim
-        assert attention_dim % self.num_heads == 0
+        assert attention_dim % self.num_heads == 0, (attention_dim, self.num_heads)
         self.dropout_rate = dropout_rate
 
         self.depth = attention_dim // self.num_heads
@@ -640,6 +640,7 @@ class SASREC(tf.keras.Model):
         """
         num_epochs = kwargs.get("num_epochs", 10)
         batch_size = kwargs.get("batch_size", 128)
+        eval_batch_size = kwargs.get("batch_size", 16)
         lr = kwargs.get("learning_rate", 0.001)
         val_epoch = kwargs.get("val_epoch", 5)
 
@@ -689,9 +690,7 @@ class SASREC(tf.keras.Model):
 
             step_loss = []
             train_loss.reset_states()
-            for step in tqdm(
-                range(num_steps), total=num_steps, ncols=70, leave=False, unit="b"
-            ):
+            for step in tqdm(range(num_steps), total=num_steps, ncols=70):
 
                 u, seq, pos, neg = sampler.next_batch()
 
@@ -705,22 +704,22 @@ class SASREC(tf.keras.Model):
                 t1 = t0.interval
                 T += t1
                 print("Evaluating...")
-                t_test = self.evaluate(dataset)
-                t_valid = self.evaluate_valid(dataset)
-                print(
-                    f"\nepoch: {epoch}, time: {T}, valid (NDCG@10: {t_valid[0]}, HR@10: {t_valid[1]})"
-                )
+                t_test = self.evaluate(dataset, eval_batch_size)
+                # t_valid = self.evaluate_valid(dataset)
+                # print(
+                #     f"\nepoch: {epoch}, time: {T}, valid (NDCG@10: {t_valid[0]}, HR@10: {t_valid[1]})"
+                # )
                 print(
                     f"epoch: {epoch}, time: {T},  test (NDCG@10: {t_test[0]}, HR@10: {t_test[1]})"
                 )
                 t0.start()
 
-        t_test = self.evaluate(dataset)
+        t_test = self.evaluate(dataset, eval_batch_size)
         print(f"\nepoch: {epoch}, test (NDCG@10: {t_test[0]}, HR@10: {t_test[1]})")
 
         return t_test
 
-    def evaluate(self, dataset):
+    def evaluate(model, dataset, batch_size):
         """
         Evaluation on the test users (users with at least 3 items)
         """
@@ -734,51 +733,42 @@ class SASREC(tf.keras.Model):
         HT = 0.0
         valid_user = 0.0
 
-        if usernum > 10000:
-            users = random.sample(range(1, usernum + 1), 10000)
-        else:
-            users = range(1, usernum + 1)
+        users = np.arange(1, 2_000)
+        pbar = tqdm(np.array_split(users, max(1, len(users) // batch_size)), ncols=70)
 
-        for u in tqdm(users, ncols=70, leave=False, unit="b"):
-
-            if len(train[u]) < 1 or len(test[u]) < 1:
-                continue
-
-            seq = np.zeros([self.seq_max_len], dtype=np.int32)
-            idx = self.seq_max_len - 1
-            seq[idx] = valid[u][0]
-            idx -= 1
-            for i in reversed(train[u]):
-                seq[idx] = i
-                idx -= 1
-                if idx == -1:
-                    break
-            rated = set(train[u])
-            rated.add(0)
-            item_idx = [test[u][0]]
-            for _ in range(self.num_neg_test):
-                t = np.random.randint(1, itemnum + 1)
-                while t in rated:
+        for users_batch in pbar:
+            seq = [train[u] for u in users_batch]
+            candidates = []
+            for u in users_batch:
+                rated = set(train[u])
+                rated.add(0)
+                item_idx = [test[u][0]]
+                for _ in range(model.num_neg_test):
                     t = np.random.randint(1, itemnum + 1)
-                item_idx.append(t)
+                    while t in rated:
+                        t = np.random.randint(1, itemnum + 1)
+                    item_idx.append(t)
+                candidates.append(item_idx)
 
-            inputs = {}
-            inputs["user"] = np.expand_dims(np.array([u]), axis=-1)
-            inputs["input_seq"] = np.array([seq])
-            inputs["candidate"] = np.array([item_idx])
+            input_seq = tf.keras.preprocessing.sequence.pad_sequences(
+                seq, padding="pre", truncating="pre", maxlen=model.seq_max_len)
+
+            inputs = {
+                "user": np.expand_dims(users_batch, axis=-1),
+                "input_seq": input_seq,
+                "candidate": np.array(candidates)
+            }
 
             # inverse to get descending sort
-            predictions = -1.0 * self.predict(inputs)
+            predictions = -1.0 * model.predict(inputs)
             predictions = np.array(predictions)
-            predictions = predictions[0]
+            predictions = predictions
 
-            rank = predictions.argsort().argsort()[0]
+            rank = predictions.argsort(axis=-1).argsort(axis=-1)[:, 0]
 
-            valid_user += 1
-
-            if rank < 10:
-                NDCG += 1 / np.log2(rank + 2)
-                HT += 1
+            valid_user += len(rank)
+            NDCG += sum(1 / np.log2(np.where(rank < 10, rank, np.inf) + 2))
+            HT += sum(rank < 10)
 
         return NDCG / valid_user, HT / valid_user
 
@@ -820,10 +810,11 @@ class SASREC(tf.keras.Model):
                     t = np.random.randint(1, itemnum + 1)
                 item_idx.append(t)
 
-            inputs = {}
-            inputs["user"] = np.expand_dims(np.array([u]), axis=-1)
-            inputs["input_seq"] = np.array([seq])
-            inputs["candidate"] = np.array([item_idx])
+            inputs = {
+                "user": np.expand_dims(np.array([u]), axis=-1),
+                "input_seq": np.array([seq]),
+                "candidate": np.array([item_idx])
+            }
 
             # predictions = -model.predict(sess, [u], [seq], item_idx)
             predictions = -1.0 * self.predict(inputs)
