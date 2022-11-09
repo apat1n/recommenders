@@ -1,5 +1,6 @@
 # Copyright (c) Microsoft Corporation. All rights reserved.
 # Licensed under the MIT License.
+import numpy as np
 import tensorflow as tf
 from recommenders.models.sasrec.model import SASREC, Encoder, LayerNormalization
 
@@ -215,7 +216,7 @@ class SSEPT(SASREC):
             [tf.shape(input_seq)[0], self.seq_max_len, tf.shape(input_seq)[0], 1 + self.num_neg_test],
         )  # (b, s, b, num_neg_test)
         test_logits = test_logits[:, -1, :, :]  # (b, b, num_neg_test)
-        return tf.concat([test_logits[i, i, :] for i in range(len(test_logits))])  # (b, num_neg_test)
+        return np.array([test_logits[i, i, :] for i in range(len(test_logits))])  # (b, num_neg_test)
 
     def loss_function(self, pos_logits, neg_logits, istarget):
         """Losses are calculated separately for the positive and negative
